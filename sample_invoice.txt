@@ -1,0 +1,15 @@
+INV-2023-001
+Date: 2023-10-15
+Vendor: ABC Office Supplies Ltd.
+Due Date: 2023-11-15
+
+Items:
+- Office chairs (10) @ $150.00 = $1,500.00
+- Desks (5) @ $200.00 = $1,000.00
+- Filing cabinets (3) @ $300.00 = $900.00
+
+Subtotal: $3,400.00
+Tax: $272.00
+Total: $3,672.00
+
+Payment terms: Net 30 days
