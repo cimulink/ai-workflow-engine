@@ -1,413 +1,547 @@
-import sqlite3
-import uuid
-import json
-import time
 import os
-from typing import Annotated, TypedDict, Dict, Any
+import json
+import uuid
+import sqlite3
+from datetime import datetime
+from typing import TypedDict, List, Dict, Any, Optional
+from typing_extensions import Annotated
+
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage
-from langchain_core.prompts import PromptTemplate
+from langchain.schema import HumanMessage, SystemMessage
+import requests
 from dotenv import load_dotenv
-from langgraph.types import interrupt, Command
 
-# Load environment variables
-load_dotenv()
-
-# Define the state schema
-class DocumentState(TypedDict):
-    document_id: str
-    content: str
-    status: str  # received, processing, pending_review, finalized, error
-    extracted_data: Dict[str, Any]
-    workflow_history: list
-
-# Initialize the LLM with OpenRouter
-# You'll need to set OPENROUTER_API_KEY in your environment variables
-# You can also specify which model to use via OPENROUTER_MODEL environment variable
-openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
-openrouter_model = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3.1:free")
-
-# Configure the LLM to use OpenRouter
-llm = ChatOpenAI(
-    model=openrouter_model,
-    openai_api_key=openrouter_api_key,
-    openai_api_base="https://openrouter.ai/api/v1",
-    temperature=0
+# Import debug configuration
+from debug.debug_config import (
+    debug_step, debug_state_change, debug_api_call, 
+    debug_validation, debug_dump_state, debug_timing, 
+    debug_error, get_debugger
 )
 
-# Define the nodes
-def intake_node(state: DocumentState) -> DocumentState:
-    """Intake node that receives raw document content and initializes the workflow state."""
-    print(f"Intake node processing document {state['document_id']}")
-    
-    # Update status and history
-    state["status"] = "processing"
-    state["workflow_history"].append({
-        "node": "intake",
-        "timestamp": time.time(),
-        "message": f"Document {state['document_id']} received and initialized"
-    })
-    
-    return state
+load_dotenv()
 
-def extract_data_node(state: DocumentState) -> DocumentState:
-    """Extract data node that uses an LLM to extract structured data from the document."""
-    print(f"Extract data node processing document {state['document_id']}")
+class WorkflowState(TypedDict):
+    id: str
+    content: str
+    status: str  # received, processing, pending_review, finalized, error
+    extracted_data: Optional[Dict[str, Any]]
+    workflow_history: List[str]
+    reason_for_review: Optional[str]
+    created_at: str
+    updated_at: str
+
+class DocumentProcessor:
+    def __init__(self):
+        # Use OpenRouter API with ChatOpenAI wrapper
+        self.llm = ChatOpenAI(
+            model=os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-chat-v3.1:free"),
+            temperature=0,
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+            base_url="https://openrouter.ai/api/v1"
+        )
     
-    # Create a prompt for data extraction
-    prompt = PromptTemplate.from_template("""
-    Extract the following information from the invoice document:
-    - Vendor name
-    - Invoice ID
-    - Due date
-    - Total amount
-    
-    Document content:
-    {content}
-    
-    Provide the output in JSON format with keys: vendor_name, invoice_id, due_date, total_amount.
-    """)
-    
-    # Create a chain with the prompt and LLM
-    chain = prompt | llm
-    
-    # Get the response from the LLM
-    response = chain.invoke({"content": state["content"]})
-    
-    # Parse the response (in a real implementation, you would use a more robust parser)
-    try:
-        # For demonstration, we'll create mock data
-        # In a real implementation, you would parse the LLM response
-        extracted_data = {
-            "vendor_name": "ABC Office Supplies Ltd.",
-            "invoice_id": "INV-2023-001",
-            "due_date": "2023-11-15",
-            "total_amount": 3672.00
-        }
-        state["extracted_data"] = extracted_data
-    except Exception as e:
-        state["status"] = "error"
-        state["workflow_history"].append({
-            "node": "extract_data",
-            "timestamp": time.time(),
-            "message": f"Error extracting data: {str(e)}"
-        })
+    def intake_node(self, state: WorkflowState) -> WorkflowState:
+        """Initialize workflow state for a new document"""
+        start_time = datetime.now()
+        debug_step("INTAKE_NODE", f"Initializing document {state['id']}")
+        debug_dump_state(state, "Initial State")
+        
+        current_time = start_time.isoformat()
+        old_status = state.get("status", "unknown")
+        
+        state["status"] = "processing"
+        state["workflow_history"].append(f"Document received at {current_time}")
+        state["updated_at"] = current_time
+        
+        debug_state_change(old_status, "processing", "Document intake completed")
+        debug_timing("Intake Node", start_time)
+        debug_dump_state(state, "State After Intake")
+        
+        print(f"Processing document {state['id']}")
         return state
     
-    state["workflow_history"].append({
-        "node": "extract_data",
-        "timestamp": time.time(),
-        "message": "Data extracted successfully",
-        "data": state["extracted_data"]
-    })
+    def extract_data_node(self, state: WorkflowState) -> WorkflowState:
+        """Extract structured data from document using LLM"""
+        start_time = datetime.now()
+        debug_step("EXTRACT_DATA_NODE", f"Processing document {state['id']} with LLM")
+        
+        current_time = start_time.isoformat()
+        
+        extraction_prompt = """
+        You are a document processing assistant. Extract the following information from the given document text:
+        
+        For invoices:
+        - vendor_name: The name of the vendor/company
+        - invoice_id: The invoice number or ID
+        - due_date: The payment due date
+        - total_amount: The total amount due (as a number)
+        
+        For customer support tickets:
+        - customer_name: Customer's name
+        - email: Customer's email
+        - topic: Main topic/category
+        - sentiment: Customer sentiment (Happy, Neutral, Frustrated, Irate)
+        - urgency: Urgency level (Low, Medium, High, Critical)
+        
+        Return the extracted data as a JSON object. If you cannot find a field, set it to null.
+        If the document doesn't clearly match either category, try to extract whatever structured information you can.
+        """
+        
+        try:
+            messages = [
+                SystemMessage(content=extraction_prompt),
+                HumanMessage(content=f"Document content:\n{state['content']}")
+            ]
+            
+            debug_api_call("OpenRouter", "chat_completion", 
+                         {"model": "deepseek", "content_length": len(state['content'])})
+            
+            api_start = datetime.now()
+            response = self.llm.invoke(messages)
+            debug_timing("OpenRouter API Call", api_start)
+            
+            debug_api_call("OpenRouter", "chat_completion_response", 
+                         response_data={"response_length": len(response.content)})
+            
+            # Try to parse JSON from response
+            try:
+                extracted_data = json.loads(response.content)
+                debug_step("JSON_PARSE", "Successfully parsed LLM response as JSON")
+            except json.JSONDecodeError:
+                debug_step("JSON_PARSE_FALLBACK", "Direct JSON parsing failed, trying regex extraction")
+                # If direct JSON parsing fails, try to extract JSON from text
+                import re
+                json_match = re.search(r'\{.*\}', response.content, re.DOTALL)
+                if json_match:
+                    extracted_data = json.loads(json_match.group())
+                    debug_step("JSON_PARSE_SUCCESS", "Regex extraction successful")
+                else:
+                    extracted_data = {"error": "Failed to parse LLM response as JSON"}
+                    debug_step("JSON_PARSE_FAILED", "All JSON parsing attempts failed", "ERROR")
+            
+            state["extracted_data"] = extracted_data
+            state["workflow_history"].append(f"Data extracted at {current_time}")
+            state["updated_at"] = current_time
+            
+            debug_dump_state(extracted_data, "Extracted Data")
+            debug_timing("Complete Data Extraction", start_time)
+            
+            print(f"Extracted data for document {state['id']}: {extracted_data}")
+            
+        except Exception as e:
+            error_msg = f"Error during extraction: {str(e)}"
+            debug_error(e, f"Document {state['id']} extraction failed")
+            
+            state["extracted_data"] = {"error": error_msg}
+            state["workflow_history"].append(f"Extraction failed at {current_time}: {error_msg}")
+            state["status"] = "error"
+            debug_state_change("processing", "error", f"Extraction failed: {error_msg}")
+            
+            print(f"Error extracting data from document {state['id']}: {error_msg}")
+        
+        return state
     
-    return state
+    def validation_router(self, state: WorkflowState) -> str:
+        """Route workflow based on validation rules (routing only - no state modification)"""
+        debug_step("VALIDATION_ROUTER", f"Checking business rules for document {state['id']}")
+        
+        extracted_data = state.get("extracted_data", {})
+        debug_dump_state(extracted_data, "Data Being Validated")
+        
+        # Track validation rules and results for debugging
+        rules_checked = []
+        rule_results = []
+        reasons = []
+        
+        # Basic data validation
+        if not extracted_data or "error" in extracted_data:
+            rules_checked.append("Data Presence Check")
+            rule_results.append(False)
+            reasons.append("Missing or invalid data")
+            debug_step("VALIDATION_FAIL", "No valid extracted data found", "WARNING")
+            debug_validation(state['id'], rules_checked, rule_results)
+            print(f"Document {state['id']} requires review: Missing or invalid data")
+            return "await_human_review"
+        
+        # Invoice processing rules
+        if "total_amount" in extracted_data:
+            debug_step("VALIDATION_TYPE", "Processing as invoice document")
+            
+            # Vendor name check
+            rules_checked.append("Vendor Name Present")
+            has_vendor = bool(extracted_data.get("vendor_name"))
+            rule_results.append(has_vendor)
+            if not has_vendor:
+                reasons.append("Missing vendor name")
+            
+            # Invoice ID check
+            rules_checked.append("Invoice ID Present")
+            has_invoice_id = bool(extracted_data.get("invoice_id"))
+            rule_results.append(has_invoice_id)
+            if not has_invoice_id:
+                reasons.append("Missing invoice ID")
+            
+            # Amount threshold check
+            rules_checked.append("Amount Under $1000")
+            amount = extracted_data.get("total_amount")
+            if amount:
+                try:
+                    numeric_amount = float(str(amount).replace("$", "").replace(",", ""))
+                    amount_ok = numeric_amount <= 1000
+                    rule_results.append(amount_ok)
+                    debug_step("AMOUNT_CHECK", f"Amount ${numeric_amount} vs $1000 threshold")
+                    if not amount_ok:
+                        reasons.append("Amount exceeds $1000 threshold")
+                except (ValueError, TypeError):
+                    rule_results.append(False)
+                    reasons.append("Invalid amount format")
+                    debug_step("AMOUNT_CHECK_ERROR", f"Could not parse amount: {amount}", "ERROR")
+            else:
+                rule_results.append(True)  # No amount means no threshold issue
+        
+        # Customer support rules
+        elif "sentiment" in extracted_data:
+            debug_step("VALIDATION_TYPE", "Processing as customer support ticket")
+            
+            # Sentiment check
+            rules_checked.append("Customer Sentiment Acceptable")
+            sentiment = extracted_data.get("sentiment", "").lower()
+            sentiment_ok = sentiment != "irate"
+            rule_results.append(sentiment_ok)
+            if not sentiment_ok:
+                reasons.append("Customer sentiment is irate")
+            
+            # Security topic check
+            rules_checked.append("Non-Security Topic")
+            topic = extracted_data.get("topic", "").lower()
+            security_ok = not ("security" in topic or "vulnerability" in topic)
+            rule_results.append(security_ok)
+            if not security_ok:
+                reasons.append("Security-related issue")
+        
+        # Generic validation
+        else:
+            debug_step("VALIDATION_TYPE", "Processing as generic document")
+            rules_checked.append("All Fields Complete")
+            
+            empty_fields = []
+            for key, value in extracted_data.items():
+                if value is None or value == "":
+                    empty_fields.append(key)
+            
+            fields_complete = len(empty_fields) == 0
+            rule_results.append(fields_complete)
+            if not fields_complete:
+                reasons.extend([f"Missing or empty field: {field}" for field in empty_fields])
+        
+        # Log validation results
+        debug_validation(state['id'], rules_checked, rule_results)
+        
+        # Determine routing decision
+        if reasons:
+            reason_text = "; ".join(reasons)
+            debug_step("VALIDATION_RESULT", f"FAILED - {reason_text}", "WARNING")
+            print(f"Document {state['id']} requires review: {reason_text}")
+            return "await_human_review"
+        
+        debug_step("VALIDATION_RESULT", "PASSED - All rules satisfied", "INFO")
+        print(f"Document {state['id']} passed validation, proceeding to finalize")
+        return "finalize"
+    
+    def await_human_review_node(self, state: WorkflowState) -> WorkflowState:
+        """Interrupt workflow for human review"""
+        current_time = datetime.now().isoformat()
+        
+        # Calculate the reason for review
+        extracted_data = state.get("extracted_data", {})
+        reasons = []
+        
+        if not extracted_data or "error" in extracted_data:
+            reasons.append("Missing or invalid extracted data")
+        else:
+            # Check for missing critical fields
+            if "total_amount" in extracted_data:
+                # Invoice processing rules
+                if not extracted_data.get("vendor_name"):
+                    reasons.append("Missing vendor name")
+                if not extracted_data.get("invoice_id"):
+                    reasons.append("Missing invoice ID")
+                if extracted_data.get("total_amount") and float(str(extracted_data["total_amount"]).replace("$", "").replace(",", "")) > 1000:
+                    reasons.append("Amount exceeds $1000 threshold")
+            
+            elif "sentiment" in extracted_data:
+                # Customer support rules
+                sentiment = extracted_data.get("sentiment", "").lower()
+                topic = extracted_data.get("topic", "").lower()
+                
+                if sentiment == "irate":
+                    reasons.append("Customer sentiment is irate")
+                if "security" in topic or "vulnerability" in topic:
+                    reasons.append("Security-related issue")
+            
+            else:
+                # Generic validation - check for null/empty critical fields
+                for key, value in extracted_data.items():
+                    if value is None or value == "":
+                        reasons.append(f"Missing or empty field: {key}")
+        
+        reason_text = "; ".join(reasons) if reasons else "Unknown validation issue"
+        
+        state["status"] = "pending_review"
+        state["reason_for_review"] = reason_text
+        state["workflow_history"].append(f"Workflow paused for human review at {current_time}: {reason_text}")
+        state["updated_at"] = current_time
+        
+        print(f"Document {state['id']} requires human review: {reason_text}")
+        
+        # This node will be interrupted - execution stops here
+        return state
+    
+    def finalize_node(self, state: WorkflowState) -> WorkflowState:
+        """Finalize the workflow"""
+        current_time = datetime.now().isoformat()
+        
+        state["status"] = "finalized"
+        state["workflow_history"].append(f"Workflow finalized at {current_time}")
+        state["updated_at"] = current_time
+        
+        # Write results to file
+        output_file = f"output_{state['id']}.json"
+        with open(output_file, 'w') as f:
+            json.dump({
+                "document_id": state["id"],
+                "extracted_data": state["extracted_data"],
+                "workflow_history": state["workflow_history"],
+                "finalized_at": current_time
+            }, f, indent=2)
+        
+        print(f"Document {state['id']} processing completed. Results saved to {output_file}")
+        return state
 
-def validation_router(state: DocumentState) -> str:
-    """Validation router that determines the next node based on extracted data."""
-    print(f"Validation router processing document {state['document_id']}")
+def create_workflow():
+    """Create and compile the LangGraph workflow"""
+    processor = DocumentProcessor()
     
-    extracted_data = state.get("extracted_data", {})
-    
-    # Business rules:
-    # 1. If any field is missing, route to human review
-    # 2. If total_amount > 1000, route to human review
-    # 3. Otherwise, finalize
-    
-    missing_fields = []
-    for field in ["vendor_name", "invoice_id", "due_date", "total_amount"]:
-        if not extracted_data.get(field):
-            missing_fields.append(field)
-    
-    if missing_fields:
-        state["workflow_history"].append({
-            "node": "validation_router",
-            "timestamp": time.time(),
-            "message": f"Missing fields detected: {missing_fields}",
-            "routing_decision": "pending_review"
-        })
-        return "pending_review"
-    
-    total_amount = extracted_data.get("total_amount", 0)
-    if total_amount > 1000:
-        state["workflow_history"].append({
-            "node": "validation_router",
-            "timestamp": time.time(),
-            "message": f"Total amount {total_amount} exceeds threshold of 1000",
-            "routing_decision": "pending_review"
-        })
-        return "pending_review"
-    
-    state["workflow_history"].append({
-        "node": "validation_router",
-        "timestamp": time.time(),
-        "message": "Validation passed",
-        "routing_decision": "finalize"
-    })
-    return "finalize"
-
-def await_human_review_node(state: DocumentState) -> DocumentState:
-    """Node that pauses the workflow for human review using LangGraph's interrupt feature."""
-    print(f"Awaiting human review for document {state['document_id']}")
-    
-    state["status"] = "pending_review"
-    state["workflow_history"].append({
-        "node": "await_human_review",
-        "timestamp": time.time(),
-        "message": "Workflow paused for human review"
-    })
-    
-    # Use LangGraph's interrupt function to pause the workflow
-    # This will surface the data for human review
-    human_input = interrupt({
-        "document_id": state["document_id"],
-        "content": state["content"],
-        "extracted_data": state["extracted_data"],
-        "reason": "Document requires human review due to business rules"
-    })
-    
-    # When resumed, the human_input will contain the reviewed/edited data
-    # Update the state with the human-provided data
-    if human_input and "extracted_data" in human_input:
-        state["extracted_data"] = human_input["extracted_data"]
-    
-    # Update status to indicate human review is completed
-    state["status"] = "processing"
-    state["workflow_history"].append({
-        "node": "await_human_review",
-        "timestamp": time.time(),
-        "message": "Human review completed",
-        "human_input": human_input
-    })
-    
-    return state
-
-def human_review_completed_node(state: DocumentState) -> DocumentState:
-    """Node that processes the workflow after human review is completed."""
-    print(f"Processing document after human review {state['document_id']}")
-    
-    state["status"] = "processing"
-    state["workflow_history"].append({
-        "node": "human_review_completed",
-        "timestamp": time.time(),
-        "message": "Human review completed, continuing to finalize"
-    })
-    
-    return state
-
-def finalize_node(state: DocumentState) -> DocumentState:
-    """Finalize node that completes the workflow."""
-    print(f"Finalizing document {state['document_id']}")
-    
-    state["status"] = "finalized"
-    state["workflow_history"].append({
-        "node": "finalize",
-        "timestamp": time.time(),
-        "message": "Workflow finalized successfully",
-        "final_data": state["extracted_data"]
-    })
-    
-    # In a real implementation, you would save the data to a file or database
-    print(f"Finalized data: {state['extracted_data']}")
-    
-    return state
-
-# Create the graph
-def create_workflow_graph():
-    """Create and compile the workflow graph."""
-    # Create the graph
-    workflow = StateGraph(DocumentState)
+    # Create the state graph
+    workflow = StateGraph(WorkflowState)
     
     # Add nodes
-    workflow.add_node("intake", intake_node)
-    workflow.add_node("extract_data", extract_data_node)
-    workflow.add_node("await_human_review", await_human_review_node)
-    workflow.add_node("human_review_completed", human_review_completed_node)
-    workflow.add_node("finalize", finalize_node)
+    workflow.add_node("intake", processor.intake_node)
+    workflow.add_node("extract_data", processor.extract_data_node)
+    workflow.add_node("await_human_review", processor.await_human_review_node)
+    workflow.add_node("finalize", processor.finalize_node)
+    
+    # Set entry point
+    workflow.set_entry_point("intake")
     
     # Add edges
     workflow.add_edge("intake", "extract_data")
     workflow.add_conditional_edges(
         "extract_data",
-        validation_router,
+        processor.validation_router,
         {
-            "pending_review": "await_human_review",
+            "await_human_review": "await_human_review",
             "finalize": "finalize"
         }
     )
-    # After human review, we go to human_review_completed, then to finalize
-    workflow.add_edge("await_human_review", "human_review_completed")
-    workflow.add_edge("human_review_completed", "finalize")
+    
+    # Terminal nodes
     workflow.add_edge("finalize", END)
     
-    # Set entry point
-    workflow.set_entry_point("intake")
+    # After human review, re-validate
+    workflow.add_conditional_edges(
+        "await_human_review",
+        processor.validation_router,
+        {
+            "await_human_review": "await_human_review",  # Still needs review
+            "finalize": "finalize"  # Can now finalize
+        }
+    )
     
     return workflow
 
-# Add a table for storing submitted documents
-def initialize_database():
-    """Initialize the database with required tables."""
-    conn = sqlite3.connect("workflow.db")
-    cursor = conn.cursor()
+def setup_database():
+    """Initialize SQLite database for checkpointing"""
+    os.makedirs("./checkpoints", exist_ok=True)
+    db_path = "./checkpoints/workflow.db"
     
-    # Create the checkpoints table if it doesn't exist
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS checkpoints_v2 (
-            thread_id TEXT PRIMARY KEY,
-            checkpoint BLOB,
-            metadata BLOB,
-            created_at TEXT,
-            parent_checkpoint TEXT
-        )
-    """)
+    # Initialize the SqliteSaver with proper connection
+    try:
+        # Create a connection and pass it to SqliteSaver
+        conn = sqlite3.connect(db_path, check_same_thread=False)
+        checkpointer = SqliteSaver(conn)
+    except Exception as e:
+        print(f"Warning: Database setup issue: {e}")
+        try:
+            # Fallback to in-memory database
+            conn = sqlite3.connect(":memory:", check_same_thread=False)
+            checkpointer = SqliteSaver(conn)
+        except Exception as e2:
+            print(f"Error: Cannot initialize checkpointer: {e2}")
+            raise
     
-    # Create a table for storing submitted documents
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS documents (
-            document_id TEXT PRIMARY KEY,
-            content TEXT,
-            status TEXT DEFAULT 'received',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    conn.commit()
-    conn.close()
+    return checkpointer
 
-# Function to submit a new document
-def submit_document(content: str) -> str:
-    """Submit a new document to the workflow."""
-    # Create a unique document ID
-    document_id = str(uuid.uuid4())
+def run_workflow(document_content: str, document_id: str = None):
+    """Run the workflow for a document"""
+    workflow_start = datetime.now()
     
-    # Initialize the database
-    initialize_database()
+    if document_id is None:
+        document_id = str(uuid.uuid4())
     
-    # Store the document in the database
-    conn = sqlite3.connect("workflow.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO documents (document_id, content, status)
-        VALUES (?, ?, ?)
-    """, (document_id, content, "received"))
-    conn.commit()
-    conn.close()
+    debug_step("WORKFLOW_START", f"Starting workflow for document {document_id}")
+    debug_step("DOCUMENT_INFO", f"Content length: {len(document_content)} chars")
     
-    print(f"Document {document_id} submitted successfully")
-    print("Start the engine with 'python engine.py' to process this document.")
+    # Setup
+    debug_step("SETUP_WORKFLOW", "Creating workflow graph and checkpointer")
+    setup_start = datetime.now()
     
-    return document_id
+    workflow = create_workflow()
+    checkpointer = setup_database()
+    
+    # Compile with checkpointer
+    app = workflow.compile(
+        checkpointer=checkpointer,
+        interrupt_after=["await_human_review"]
+    )
+    
+    debug_timing("Workflow Setup", setup_start)
+    debug_step("SETUP_COMPLETE", "Workflow compiled with SQLite checkpointer")
+    
+    # Initialize state
+    initial_state = WorkflowState(
+        id=document_id,
+        content=document_content,
+        status="received",
+        extracted_data=None,
+        workflow_history=[],
+        reason_for_review=None,
+        created_at=datetime.now().isoformat(),
+        updated_at=datetime.now().isoformat()
+    )
+    
+    debug_dump_state(initial_state, "Initial Workflow State")
+    
+    # Run workflow
+    config = {"configurable": {"thread_id": document_id}}
+    debug_step("WORKFLOW_EXECUTION", f"Starting workflow stream with config: {config}")
+    
+    try:
+        result = None
+        final_state = None
+        step_count = 0
+        
+        execution_start = datetime.now()
+        for state in app.stream(initial_state, config):
+            step_count += 1
+            result = state
+            debug_step("WORKFLOW_STEP", f"Step {step_count}: {list(state.keys())}")
+            print(f"Current state: {list(state.keys())}")
+        
+        debug_timing("Workflow Execution", execution_start)
+        debug_step("WORKFLOW_STREAM_COMPLETE", f"Completed {step_count} workflow steps")
+        
+        # Get the final state after workflow completion/interruption
+        debug_step("STATE_RETRIEVAL", "Retrieving final state from checkpointer")
+        try:
+            checkpoint = app.get_state(config)
+            if checkpoint and hasattr(checkpoint, 'values'):
+                final_state = checkpoint.values
+                debug_step("STATE_SUCCESS", "Retrieved state from checkpoint")
+            else:
+                final_state = result
+                debug_step("STATE_FALLBACK", "Using stream result as final state")
+        except Exception as state_error:
+            debug_error(state_error, "Error retrieving final state")
+            final_state = result
+        
+        debug_dump_state(final_state, "Final Workflow State")
+        debug_timing("Complete Workflow", workflow_start)
+        
+        return final_state, app, config
+        
+    except Exception as e:
+        debug_error(e, f"Workflow execution failed for document {document_id}")
+        print(f"Error running workflow: {e}")
+        return None, app, config
 
-# Main function to run the engine
-def run_engine():
-    """Run the workflow engine."""
-    # Initialize the database
-    initialize_database()
+def resume_workflow(document_id: str, updated_data: Dict[str, Any] = None):
+    """Resume a paused workflow with updated data"""
+    print(f"Resuming workflow for document {document_id}")
     
-    # Create the workflow graph
-    workflow = create_workflow_graph()
+    workflow = create_workflow()
+    checkpointer = setup_database()
     
-    # Create a SqliteSaver checkpointer using context manager
-    with SqliteSaver.from_conn_string("workflow.db") as checkpointer:
-        # Compile the graph with the checkpointer
-        app = workflow.compile(checkpointer=checkpointer)
-        
-        print("Workflow engine started. Listening for new documents...")
-        print(f"Using OpenRouter with model: {openrouter_model}")
-        
-        # Process only documents with "received" status (not those pending human review)
-        conn = sqlite3.connect("workflow.db")
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT document_id, content FROM documents 
-            WHERE status = 'received'
-        """)
-        pending_documents = cursor.fetchall()
-        conn.close()
-        
-        if not pending_documents:
-            print("No pending documents found.")
-            return app
-        
-        print(f"Processing {len(pending_documents)} pending documents...")
-        
-        # Process each pending document
-        for document_id, content in pending_documents:
-            print(f"Processing document {document_id}...")
+    app = workflow.compile(
+        checkpointer=checkpointer,
+        interrupt_after=["await_human_review"]
+    )
+    
+    config = {"configurable": {"thread_id": document_id}}
+    
+    # Get current state
+    current_state = app.get_state(config)
+    if not current_state:
+        print(f"No workflow found for document {document_id}")
+        return None
+    
+    # Update state with corrected data if provided
+    if updated_data:
+        try:
+            new_state = current_state.values.copy()
+            if "extracted_data" in new_state and isinstance(new_state["extracted_data"], dict):
+                new_state["extracted_data"].update(updated_data)
             
-            # Create the initial state for the document
-            initial_state = DocumentState(
-                document_id=document_id,
-                content=content,
-                status="received",
-                extracted_data={},
-                workflow_history=[]
-            )
+            new_state["workflow_history"].append(f"Human review completed at {datetime.now().isoformat()}")
+            new_state["updated_at"] = datetime.now().isoformat()
             
-            # Process the document
-            config = {"configurable": {"thread_id": document_id}}
-            try:
-                final_state = app.invoke(initial_state, config)
-                print(f"Document {document_id} processed successfully. Final status: {final_state['status']}")
-                
-                # Update document status
-                conn = sqlite3.connect("workflow.db")
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE documents 
-                    SET status = ? 
-                    WHERE document_id = ?
-                """, (final_state['status'], document_id))
-                conn.commit()
-                conn.close()
-            except Exception as e:
-                print(f"Error processing document {document_id}: {e}")
-                # Update document status to error
-                conn = sqlite3.connect("workflow.db")
-                cursor = conn.cursor()
-                cursor.execute("""
-                    UPDATE documents 
-                    SET status = 'error' 
-                    WHERE document_id = ?
-                """, (document_id,))
-                conn.commit()
-                conn.close()
+            # Update the state in the checkpointer
+            app.update_state(config, new_state)
+            print(f"Updated workflow state with corrections: {list(updated_data.keys())}")
+        except Exception as e:
+            print(f"Error updating state: {e}")
+            return None
+    
+    # Resume workflow
+    try:
+        result = None
+        for state in app.stream(None, config):
+            result = state
+            print(f"Resumed workflow step: {list(state.keys())}")
         
-        return app
-
-def run_example_document():
-    """Run an example document through the workflow."""
-    # Create an example document
-    example_content = """
-    INV-2023-001
-    Date: 2023-10-15
-    Vendor: ABC Office Supplies Ltd.
-    Due Date: 2023-11-15
-    
-    Items:
-    - Office chairs (10) @ $150.00 = $1,500.00
-    - Desks (5) @ $200.00 = $1,000.00
-    - Filing cabinets (3) @ $300.00 = $900.00
-    
-    Subtotal: $3,400.00
-    Tax: $272.00
-    Total: $3,672.00
-    
-    Payment terms: Net 30 days
-    """
-    
-    # Submit and process the example document
-    document_id = submit_document(example_content)
-    print(f"Example document submitted with ID: {document_id}")
-    
-    # Run the engine to process the document
-    run_engine()
-    
-    return document_id
+        # Get final state
+        final_state = app.get_state(config)
+        if final_state and hasattr(final_state, 'values'):
+            final_status = final_state.values.get('status', 'unknown')
+            print(f"Workflow resumed successfully, final status: {final_status}")
+            return final_state.values
+        
+        return result
+        
+    except Exception as e:
+        print(f"Error resuming workflow: {e}")
+        return None
 
 if __name__ == "__main__":
-    # Run the engine when the script is executed directly
-    run_engine()
+    # Example usage
+    sample_invoice = """
+    INVOICE
+    From: Acme Corp
+    Invoice #: INV-2024-001
+    Due Date: 2024-10-15
+    Total Amount: $1,250.00
+    
+    Services provided:
+    - Consulting services: $1,000.00
+    - Processing fee: $250.00
+    """
+    
+    print("Starting workflow engine...")
+    result, app, config = run_workflow(sample_invoice)
+    
+    if result:
+        print(f"Workflow completed with status: {result}")
+    else:
+        print("Workflow execution failed")

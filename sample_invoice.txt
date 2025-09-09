@@ -1,15 +1,37 @@
-INV-2023-001
-Date: 2023-10-15
-Vendor: ABC Office Supplies Ltd.
-Due Date: 2023-11-15
+INVOICE
 
-Items:
-- Office chairs (10) @ $150.00 = $1,500.00
-- Desks (5) @ $200.00 = $1,000.00
-- Filing cabinets (3) @ $300.00 = $900.00
+From: Tech Solutions LLC
+Address: 456 Innovation Drive, Tech City, TC 54321
+Phone: (555) 987-6543
+Email: billing@techsolutions.com
 
-Subtotal: $3,400.00
-Tax: $272.00
-Total: $3,672.00
+Bill To: Global Enterprises Inc
+Address: 789 Corporate Blvd, Business Park, BP 98765
+Attention: Accounts Payable Department
 
-Payment terms: Net 30 days
+Invoice Number: TS-2024-0892
+Date: September 8, 2024
+Due Date: October 8, 2024
+Payment Terms: Net 30 days
+
+Description of Services:
+- Cloud infrastructure setup and configuration: $2,400.00
+- Database migration and optimization: $1,800.00  
+- Security audit and implementation: $900.00
+- 24/7 monitoring service (3 months): $450.00
+
+Subtotal: $5,550.00
+Sales Tax (7.25%): $402.38
+Total Amount Due: $5,952.38
+
+Payment Methods:
+- Check payable to "Tech Solutions LLC"
+- Wire Transfer: Bank of Tech, Account #123456789
+- ACH/Electronic Transfer available upon request
+
+Thank you for your business!
+
+For questions about this invoice, contact:
+Sarah Johnson, Billing Manager
+sarah.johnson@techsolutions.com
+(555) 987-6543 ext. 201

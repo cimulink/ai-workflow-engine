@@ -1,274 +1,409 @@
 # Resilient AI Workflow Engine
 
-A production-ready reference implementation for building resilient, enterprise-grade AI workflows using LangGraph with human-in-the-loop capabilities.
+A production-ready reference implementation for building resilient, enterprise-grade AI workflows using LangGraph. This project demonstrates how to architect stateful, asynchronous, and fault-tolerant systems with seamless "human-in-the-loop" (HITL) capabilities.
 
-## Overview
+## 🎯 Overview
 
-This project demonstrates how to build a robust AI workflow engine that can handle long-running processes, recover from failures, and incorporate human review when needed. It's designed for mission-critical tasks where accuracy and reliability are paramount.
+This is not another AI chatbot demo. It's a **production-ready pattern** for developers building mission-critical AI systems where accuracy, auditability, and recovery from failure are paramount.
 
-## Features
+### Key Features
 
-- **Stateful Workflows**: Built with LangGraph for robust state management
-- **Persistent Checkpointing**: Automatic state persistence to SQLite database using SqliteSaver
-- **Fault Tolerance**: Graceful recovery from system crashes
-- **Human-in-the-Loop**: Streamlit UI for human review and approval
-- **Modular Architecture**: Clean separation of concerns for easy maintenance
+- ✅ **Persistent Checkpointing**: SQLite-based state management that survives crashes
+- 🔄 **Workflow Interruption & Resumption**: Seamless human-in-the-loop integration  
+- 🛡️ **Fault Tolerance**: Complete workflow recovery after system restarts
+- 🎛️ **Human Review Interface**: Streamlit-based UI for document validation
+- 📊 **Structured Data Extraction**: LLM-powered document processing with validation
+- 🏗️ **Modular Architecture**: Clean separation of concerns for easy extension
 
-## System Architecture
+## 🚀 Quick Start
 
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│  submit.py      │    │   engine.py      │    │    ui.py        │
-│ (Submission     │───▶│ (Workflow Engine)│◀──▶│ (Review UI)     │
-│  Script)        │    │                  │    │                 │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-                                │
-                                ▼
-                        ┌─────────────────┐
-                        │  workflow.db    │
-                        │ (SQLite DB)     │
-                        └─────────────────┘
-```
-
-## Prerequisites
+### Prerequisites
 
 - Python 3.8+
-- OpenRouter API key (set as `OPENROUTER_API_KEY` environment variable)
+- OpenRouter API key
 
-## Installation
+### Installation
 
-1. Clone the repository:
+1. **Clone and setup**:
    ```bash
    git clone <repository-url>
-   cd resilient-ai-workflow-engine
-   ```
-
-2. Create a virtual environment:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. Install dependencies:
-   ```bash
+   cd ai-workflow-engine
    pip install -r requirements.txt
    ```
 
-4. Set your OpenRouter API key:
+2. **Configure API key**:
    ```bash
-   export OPENROUTER_API_KEY="your-api-key-here"
-   ```
-   On Windows:
-   ```cmd
-   set OPENROUTER_API_KEY=your-api-key-here
+   cp .env.example .env
+   # Edit .env and add your OPENROUTER_API_KEY
    ```
 
-5. Optionally, specify which model to use (default is openai/gpt-3.5-turbo):
+3. **Test the system**:
    ```bash
-   export OPENROUTER_MODEL="anthropic/claude-3-haiku"
+   python test_workflow.py
    ```
 
-## Usage
+4. **Submit documents**:
+   ```bash
+   # Submit sample invoice
+   python submit.py --sample
+   
+   # Submit custom content
+   python submit.py "Invoice from Acme Corp for $500"
+   
+   # Submit from file
+   python submit.py --file invoice.txt
+   ```
 
-### 1. Submit Documents
+5. **Review queue UI**:
+   ```bash
+   streamlit run ui.py
+   ```
 
-Submit documents for processing:
-```bash
-# Submit content directly
-python submit.py --content "Sample invoice content here"
+## 📋 Use Cases
 
-# Or submit content from a file
-python submit.py --file path/to/document.txt
-```
+### Invoice Processing
+- **Automatic Approval**: Invoices under $1,000 with complete data
+- **Human Review**: Large amounts, missing fields, or validation failures
+- **Data Extraction**: Vendor name, invoice ID, due date, total amount
 
-### 2. Run the Workflow Engine
+### Customer Support Tickets  
+- **Automatic Routing**: Standard inquiries processed automatically
+- **Escalation**: Irate customers or security issues flagged for review
+- **Data Extraction**: Sentiment, topic, urgency, customer details
 
-Process submitted documents:
-```bash
-python engine.py
-```
+## 🏗️ Architecture & Flow Diagrams
 
-The engine will process all documents that have been submitted but not yet processed.
-
-**Note**: The engine uses SqliteSaver for persistent checkpointing, which is implemented as a context manager. This ensures that workflow state is properly saved to the database after each step.
-
-### 3. Check Document Status
-
-Check the status of documents in the workflow:
-```bash
-# Check all documents
-python check_status.py
-
-# Check specific document
-python check_status.py document-id-here
-```
-
-### 4. Review Documents (Human-in-the-Loop)
-
-Start the Streamlit UI for human review:
-```bash
-streamlit run ui.py
-```
-
-Navigate to the provided URL in your browser to review and approve documents that require human validation.
-
-## How It Works
-
-1. **Document Submission**: Documents are submitted via the `submit.py` script which stores them in the database with a "received" status.
-
-2. **Workflow Engine**: The `engine.py` script processes documents with "received" status by running them through the LangGraph workflow.
-
-3. **Workflow Processing**: The workflow processes documents through a series of nodes:
-   - Intake Node: Receives and initializes the document
-   - Extract Data Node: Uses an LLM to extract structured data
-   - Validation Router: Determines if human review is needed
-   - Await Human Review Node: Pauses workflow for human intervention (if needed)
-   - Finalize Node: Completes the workflow
-
-4. **State Persistence**: After each step, the workflow state is saved to the database using LangGraph's SqliteSaver with proper context manager usage.
-
-5. **Conditional Routing**: Documents are automatically routed based on business rules:
-   - If all fields are extracted with high confidence and total amount < $1000, the workflow finalizes automatically
-   - Otherwise, the workflow pauses for human review
-
-6. **Human Review**: The Streamlit UI displays documents pending review, allowing users to correct data and approve/resume workflows.
-
-7. **Fault Tolerance**: If the engine crashes, it can be restarted and will resume processing from the last saved checkpoint.
-
-### End-to-End Workflow Diagram
-
-```mermaid
-graph TD
-    A[Document Submission<br/>submit.py] --> B[Store in Database]
-    B --> C[Workflow Engine<br/>engine.py]
-    C --> D[Intake Node]
-    D --> E[Extract Data Node]
-    E --> F[Validation Router]
-    F -->|All fields present AND total ≤ $1000| G[Finalize Node]
-    F -->|Missing fields OR total > $1000| H[Await Human Review Node]
-    H -->|Workflow Paused & State Saved| I[Human Reviews in UI<br/>ui.py]
-    I -->|Approve & Resume| J[Workflow Resumes]
-    J --> G
-    G --> K[Workflow Finalized]
-    
-    subgraph Database
-        L[(workflow.db<br/>State Persistence)]
-    end
-    
-    D -.-> L
-    E -.-> L
-    F -.-> L
-    G -.-> L
-    H -.-> L
-    
-    style H fill:#f9f,stroke:#333,stroke-width:2px
-    style I fill:#ff9,stroke:#333,stroke-width:2px
-```
-
-### Detailed Node Interactions
-
-```mermaid
-graph LR
-    A[Intake Node] --> B[Extract Data Node]
-    B --> C[Validation Router]
-    C -->|Pass| D[Finalize Node]
-    C -->|Fail| E[Await Human Review]
-    E -.-> F((Human Review UI))
-    F -.-> G[Resume Workflow]
-    G --> D
-    
-    subgraph Workflow Engine
-        A
-        B
-        C
-        D
-        E
-    end
-    
-    subgraph External Interaction
-        F
-    end
-    
-    style Workflow Engine fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    style External Interaction fill:#f1f8e9,stroke:#33691e,stroke-width:2px
-```
-
-### Complete System Architecture with Data Flow
+### System Architecture Overview
 
 ```mermaid
 graph TB
-    subgraph "User Interface"
-        A[submit.py<br/>Document Submission]
-        B[ui.py<br/>Human Review Interface]
-        C[check_status.py<br/>Status Checking]
+    subgraph "Input Layer"
+        CLI[submit.py<br/>CLI Submission]
+        FILE[File Input<br/>sample_invoice.txt]
+        SAMPLE[Sample Data<br/>--sample flag]
     end
     
-    subgraph "Core Engine"
-        D[engine.py<br/>LangGraph Workflow]
+    subgraph "Processing Engine"
+        ENGINE[engine.py<br/>LangGraph Workflow]
+        OPENROUTER[OpenRouter API<br/>DeepSeek Model]
+        ENGINE -.-> OPENROUTER
     end
     
     subgraph "Persistence Layer"
-        E[(workflow.db<br/>SQLite Database)]
-        E1[(Documents Table)]
-        E2[(Checkpoints Table)]
-        E --> E1
-        E --> E2
+        DB[(workflow.db<br/>SQLite Checkpoints)]
+        FILES[Output Files<br/>output_*.json]
     end
     
-    A -- "1. Submit Document" --> E1
-    D -- "2. Process Pending<br/>Documents" --> E1
-    D -- "3. Save State" --> E2
-    D -- "4. Pause for Review" --> B
-    B -- "5. Resume with<br/>Corrected Data" --> D
-    D -- "6. Finalize<br/>Workflow" --> E1
-    D -- "7. Update State" --> E2
-    C -- "Query Status" --> E
+    subgraph "Human Interface"
+        UI[ui.py<br/>Streamlit Dashboard]
+        QUEUE[Review Queue<br/>Pending Documents]
+        UI --> QUEUE
+    end
     
-    style A fill:#e3f2fd,stroke:#1976d2
-    style B fill:#fff3e0,stroke:#f57c00
-    style C fill:#fce4ec,stroke:#c2185b
-    style D fill:#f3e5f5,stroke:#7b1fa2
-    style E fill:#e8f5e8,stroke:#388e3c
+    CLI --> ENGINE
+    FILE --> CLI
+    SAMPLE --> CLI
+    
+    ENGINE <--> DB
+    ENGINE --> FILES
+    
+    UI <--> DB
+    UI --> ENGINE
+    
+    classDef input fill:#e1f5fe
+    classDef processing fill:#f3e5f5
+    classDef storage fill:#e8f5e8
+    classDef interface fill:#fff3e0
+    
+    class CLI,FILE,SAMPLE input
+    class ENGINE,OPENROUTER processing
+    class DB,FILES storage
+    class UI,QUEUE interface
 ```
 
-## Project Structure
+### LangGraph Workflow Node Structure
 
+```mermaid
+graph TD
+    START([Document Submitted]) --> INTAKE[intake_node<br/>Initialize State]
+    
+    INTAKE --> EXTRACT[extract_data_node<br/>LLM Processing<br/>OpenRouter API]
+    
+    EXTRACT --> VALIDATE{validation_router<br/>Business Rules Check}
+    
+    VALIDATE -->|Pass Validation<br/>Amount < $1000<br/>All Required Fields| FINALIZE[finalize_node<br/>Save Results<br/>Mark Complete]
+    
+    VALIDATE -->|Fail Validation<br/>Amount > $1000<br/>Missing Fields<br/>Security Issues| REVIEW[await_human_review_node<br/>Set Status: pending_review<br/>INTERRUPT WORKFLOW]
+    
+    FINALIZE --> END1([Workflow Complete<br/>Status: finalized])
+    
+    REVIEW --> INTERRUPT{{SYSTEM PAUSE<br/>Human Intervention Required}}
+    
+    INTERRUPT --> HUMAN[Human Reviews via UI<br/>Edits/Corrects Data<br/>Clicks 'Approve & Resume']
+    
+    HUMAN --> RESUME[resume_workflow<br/>Update State<br/>Continue Processing]
+    
+    RESUME --> VALIDATE2{validation_router<br/>Re-check Rules}
+    
+    VALIDATE2 -->|Now Passes| FINALIZE2[finalize_node<br/>Complete Processing]
+    VALIDATE2 -->|Still Fails| REVIEW2[await_human_review_node<br/>Back to Review]
+    
+    FINALIZE2 --> END2([Workflow Complete<br/>Status: finalized])
+    REVIEW2 --> INTERRUPT
+    
+    classDef startend fill:#c8e6c9
+    classDef process fill:#bbdefb
+    classDef decision fill:#ffe0b2
+    classDef interrupt fill:#ffcdd2
+    classDef human fill:#f8bbd9
+    
+    class START,END1,END2 startend
+    class INTAKE,EXTRACT,FINALIZE,FINALIZE2,RESUME process
+    class VALIDATE,VALIDATE2 decision
+    class REVIEW,REVIEW2,INTERRUPT interrupt
+    class HUMAN human
 ```
-resilient-ai-workflow-engine/
-├── engine.py           # Core workflow engine
-├── submit.py           # Document submission script
-├── ui.py               # Streamlit review interface
-├── check_status.py     # Document status checking script
-├── workflow.db         # SQLite database (created on first run)
-├── requirements.txt    # Python dependencies
-├── .env.example        # Environment variables template
-├── README.md           # This file
-└── sample_invoice.txt  # Sample document for testing
+
+### Data Flow & State Transitions
+
+```mermaid
+stateDiagram-v2
+    [*] --> received : Document Submitted
+    received --> processing : intake_node()
+    processing --> processing : extract_data_node()
+    
+    processing --> pending_review : validation_router()<br/>❌ Fails validation
+    processing --> finalized : validation_router()<br/>✅ Passes validation
+    
+    pending_review --> pending_review : Human reviewing<br/>in Streamlit UI
+    pending_review --> processing : resume_workflow()<br/>with corrections
+    
+    finalized --> [*] : Workflow Complete
+    
+    note right of pending_review
+        INTERRUPT POINT
+        - System pauses execution
+        - State persisted to SQLite
+        - Human intervention required
+        - Resume via UI approval
+    end note
+    
+    note right of processing
+        BUSINESS RULES
+        • Amount > $1000 → Review
+        • Missing required fields → Review  
+        • Irate customer → Review
+        • Security topics → Review
+    end note
 ```
 
-## Customization
+### End-to-End System Flow
 
-To adapt this engine for your specific use case:
+```mermaid
+sequenceDiagram
+    participant User
+    participant Submit as submit.py
+    participant Engine as engine.py
+    participant OpenRouter as OpenRouter API
+    participant DB as workflow.db
+    participant UI as ui.py (Streamlit)
+    participant Human as Human Reviewer
+    
+    %% Document Submission Flow
+    User->>Submit: python submit.py --file invoice.txt
+    Submit->>Engine: run_workflow(content, doc_id)
+    
+    %% Initial Processing
+    Engine->>DB: Save initial state (received)
+    Engine->>Engine: intake_node() → status: processing
+    Engine->>OpenRouter: Extract structured data from document
+    OpenRouter-->>Engine: {vendor, invoice_id, amount, etc.}
+    Engine->>DB: Update state with extracted_data
+    
+    %% Validation Decision
+    Engine->>Engine: validation_router() checks business rules
+    
+    alt Amount < $1000 & Complete Data
+        Engine->>Engine: finalize_node() → status: finalized
+        Engine->>DB: Save final state
+        Engine-->>Submit: Workflow complete
+        Submit-->>User: ✅ Document processed automatically
+    else Amount > $1000 OR Missing Data OR Security Issue
+        Engine->>Engine: await_human_review_node()
+        Engine->>DB: Set status: pending_review
+        Engine->>Engine: INTERRUPT workflow
+        Engine-->>Submit: Workflow paused for review
+        Submit-->>User: ⚠️ Document requires human review
+    end
+    
+    %% Human Review Process
+    User->>UI: streamlit run ui.py
+    UI->>DB: Query pending workflows
+    DB-->>UI: List of documents needing review
+    UI-->>Human: Display review queue
+    
+    Human->>UI: Select document for review
+    UI->>DB: Get workflow details
+    DB-->>UI: Document content + extracted data + reason
+    UI-->>Human: Show document review interface
+    
+    Human->>UI: Edit data & click "Approve & Resume"
+    UI->>Engine: resume_workflow(doc_id, corrected_data)
+    
+    %% Resume Processing
+    Engine->>DB: Update state with corrections
+    Engine->>Engine: validation_router() re-check rules
+    
+    alt Corrected Data Passes Validation
+        Engine->>Engine: finalize_node() → status: finalized
+        Engine->>DB: Save final state
+        Engine-->>UI: Workflow completed
+        UI-->>Human: ✅ Document approved & finalized
+    else Still Fails Validation
+        Engine->>Engine: await_human_review_node()
+        Engine->>DB: Keep status: pending_review
+        Engine-->>UI: Still needs review
+        UI-->>Human: Document returned to queue
+    end
+```
 
-1. Modify the `DocumentState` schema in `engine.py` to match your document structure
-2. Update the data extraction logic to reflect your needs
-3. Adjust the business rules in `validation_router` function
-4. Customize the Streamlit UI in `ui.py` for your review process
+### Component Interaction Details
 
-## Success Metrics
+```mermaid
+graph LR
+    subgraph "submit.py - Document Submission"
+        SUBMIT_CLI[Command Line Interface]
+        SUBMIT_FILE[File Reader]
+        SUBMIT_SAMPLE[Sample Generator]
+        SUBMIT_LOGIC[Submission Logic]
+    end
+    
+    subgraph "engine.py - Core Workflow"
+        PROCESSOR[DocumentProcessor Class]
+        NODES[Workflow Nodes]
+        ROUTER[Validation Router]
+        GRAPH[LangGraph StateGraph]
+        CHECKPOINTER[SQLite Checkpointer]
+    end
+    
+    subgraph "ui.py - Human Interface" 
+        STREAMLIT[Streamlit Framework]
+        QUEUE_UI[Review Queue Display]
+        EDIT_UI[Document Edit Interface]
+        APPROVAL[Approval Actions]
+    end
+    
+    subgraph "External Services"
+        OPENROUTER_API[OpenRouter API<br/>DeepSeek Model]
+        SQLITE_DB[(SQLite Database<br/>Persistent Storage)]
+    end
+    
+    SUBMIT_CLI --> SUBMIT_LOGIC
+    SUBMIT_FILE --> SUBMIT_LOGIC
+    SUBMIT_SAMPLE --> SUBMIT_LOGIC
+    SUBMIT_LOGIC --> GRAPH
+    
+    PROCESSOR --> NODES
+    NODES --> ROUTER
+    ROUTER --> GRAPH
+    GRAPH <--> CHECKPOINTER
+    CHECKPOINTER <--> SQLITE_DB
+    
+    NODES --> OPENROUTER_API
+    OPENROUTER_API --> NODES
+    
+    STREAMLIT --> QUEUE_UI
+    QUEUE_UI <--> SQLITE_DB
+    EDIT_UI <--> SQLITE_DB
+    APPROVAL --> GRAPH
+    
+    classDef submission fill:#e3f2fd
+    classDef core fill:#f1f8e9
+    classDef interface fill:#fff8e1
+    classDef external fill:#fce4ec
+    
+    class SUBMIT_CLI,SUBMIT_FILE,SUBMIT_SAMPLE,SUBMIT_LOGIC submission
+    class PROCESSOR,NODES,ROUTER,GRAPH,CHECKPOINTER core
+    class STREAMLIT,QUEUE_UI,EDIT_UI,APPROVAL interface
+    class OPENROUTER_API,SQLITE_DB external
+```
 
-- **Time-to-Run**: Set up and run the entire workflow in under 20 minutes
-- **Resilience**: Recover from engine crashes without losing workflow state
-- **Clarity**: Understand core concepts through well-documented code
-- **Extensibility**: Adapt the engine for new use cases with minimal changes
+### Components
 
-## Future Considerations
+1. **submit.py**: Command-line document submission script with file/sample support
+2. **engine.py**: Core LangGraph workflow with OpenRouter integration and state management
+3. **ui.py**: Streamlit interface for human review, editing, and workflow approval
+4. **workflow.db**: SQLite database for persistent checkpointing and crash recovery
 
-- API-driven architecture with FastAPI
-- Alternative persistence backends (PostgreSQL, Redis)
-- Docker containerization
-- Integration with LangSmith for observability
+## 🔄 Workflow States
 
-## License
+- **received**: Document submitted to system
+- **processing**: AI extraction in progress  
+- **pending_review**: Paused for human validation
+- **finalized**: Processing completed successfully
+- **error**: Unrecoverable processing error
 
-This project is open-source and available under the MIT License.
+## 🧪 Testing & Validation
+
+The system includes comprehensive test scenarios:
+
+```bash
+python test_workflow.py
+```
+
+Tests cover:
+- ✅ Automatic approval (small invoices)
+- ⚠️ Human review triggers (large amounts, missing data)
+- 🎭 Customer sentiment analysis (irate customers)
+- 🔄 Workflow resumption after corrections
+- 💾 Crash recovery simulation
+
+## 🛡️ Resilience Features
+
+### Crash Recovery
+If the engine process crashes:
+1. All workflow state persists in SQLite
+2. Restart the engine with `python engine.py`
+3. Use the UI to resume any pending workflows
+4. No data or progress is lost
+
+### Human Intervention
+Documents requiring review are automatically paused:
+- Missing or invalid data fields
+- Business rule violations (amount thresholds)
+- Sentiment analysis flags (irate customers)
+- Security-related topics
+
+### State Management
+- Complete workflow history tracking
+- Atomic state updates with rollback capability
+- Thread-safe concurrent processing support
+- Audit trail for compliance requirements
+
+## 📊 Success Metrics
+
+- **Time-to-Run**: Complete setup in under 20 minutes
+- **Resilience**: Survives engine crashes with full recovery
+- **Clarity**: Backend engineers can understand LangGraph concepts immediately  
+- **Extensibility**: Easy to adapt for new use cases
+
+## 🔮 Future Enhancements (V2)
+
+- **API Layer**: FastAPI integration for service-oriented architecture
+- **Database Options**: PostgreSQL, Redis backend support
+- **Containerization**: Docker Compose for one-click deployment
+- **Observability**: LangSmith integration for detailed tracing
+- **Authentication**: User management and role-based access
+- **Batch Processing**: Bulk document processing capabilities
+
+## 🤝 Contributing
+
+This project serves as a reference implementation and learning resource. Contributions that improve clarity, add test cases, or extend functionality are welcome.
+
+## 📄 License
+
+MIT License - see LICENSE file for details.
+
+---
+
+**Built with ❤️ to bridge the gap between AI demos and production systems.**
