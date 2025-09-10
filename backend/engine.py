@@ -14,11 +14,37 @@ import requests
 from dotenv import load_dotenv
 
 # Import debug configuration
-from debug.debug_config import (
-    debug_step, debug_state_change, debug_api_call, 
-    debug_validation, debug_dump_state, debug_timing, 
-    debug_error, get_debugger
-)
+import os
+import sys
+debug_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "debug and test")
+if os.path.exists(debug_dir):
+    sys.path.append(debug_dir)
+    try:
+        from debug_config import (
+            debug_step, debug_state_change, debug_api_call, 
+            debug_validation, debug_dump_state, debug_timing, 
+            debug_error, get_debugger
+        )
+    except ImportError:
+        # Fallback: create stub functions
+        def debug_step(*args, **kwargs): pass
+        def debug_state_change(*args, **kwargs): pass
+        def debug_api_call(*args, **kwargs): pass
+        def debug_validation(*args, **kwargs): pass
+        def debug_dump_state(*args, **kwargs): pass
+        def debug_timing(*args, **kwargs): pass
+        def debug_error(*args, **kwargs): pass
+        def get_debugger(): return None
+else:
+    # Create stub functions if debug directory doesn't exist
+    def debug_step(*args, **kwargs): pass
+    def debug_state_change(*args, **kwargs): pass
+    def debug_api_call(*args, **kwargs): pass
+    def debug_validation(*args, **kwargs): pass
+    def debug_dump_state(*args, **kwargs): pass
+    def debug_timing(*args, **kwargs): pass
+    def debug_error(*args, **kwargs): pass
+    def get_debugger(): return None
 
 load_dotenv()
 

@@ -6,3 +6,6 @@ typing-extensions==4.12.2
 pydantic==2.8.2
 requests==2.31.0
 python-dotenv==1.0.1
+ag-ui-protocol==0.1.8
+fastapi==0.104.1
+uvicorn==0.24.0

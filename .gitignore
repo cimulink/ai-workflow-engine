@@ -5,3 +5,4 @@ venv
 .claude
 checkpoints
 logs
+node_modules
