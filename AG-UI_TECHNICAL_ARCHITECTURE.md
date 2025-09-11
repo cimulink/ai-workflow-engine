@@ -2,11 +2,12 @@
 
 ## 🏗️ Architecture Overview
 
-### **Core Design Decision: Hybrid Approach**
+### **Core Design Decision: Pure LangGraph + AG-UI**
 
-Our AG-UI integration uses a **hybrid architecture** that combines:
-- **Legacy LangGraph Engine**: For actual document processing and LLM calls
-- **AG-UI Event Wrapper**: For real-time streaming and modern UI integration
+Our AG-UI integration now uses a **pure LangGraph architecture** that combines:
+- **Native LangGraph Execution**: Real StateGraph workflow with streaming capabilities
+- **AG-UI Events from Nodes**: Events emitted directly from LangGraph nodes during execution
+- **Custom Streaming Checkpointer**: LangGraph checkpointer that emits AG-UI events on state changes
 - **Custom Protocol Implementation**: Since the official AG-UI SDK has compatibility issues
 
 ```mermaid
@@ -19,26 +20,31 @@ graph TB
     
     subgraph "Backend (FastAPI)"
         API[AG-UI Server]
-        AGENT[DocumentWorkflowAgent]
-        WRAPPER[LangGraph Wrapper]
-        LEGACY[Original Engine.py]
+        AGENT[PureLangGraphWorkflowAgent]
+        LANGGRAPH[AGUILangGraphWorkflow]
+        NODES[LangGraph Nodes with AG-UI Events]
+        CHECKPOINTER[AGUIStreamingCheckpointer]
     end
     
     subgraph "Data Layer"
         DB[(SQLite Database)]
         EVENTS[AG-UI Events Table]
         WORKFLOWS[AG-UI Workflows Table]
+        LGSTATE[LangGraph State Store]
     end
     
     UI --> HOOKS
     HOOKS --> CLIENT
     CLIENT -->|HTTP Streaming| API
     API --> AGENT
-    AGENT --> WRAPPER
-    WRAPPER --> LEGACY
+    AGENT --> LANGGRAPH
+    LANGGRAPH --> NODES
+    NODES --> CHECKPOINTER
+    CHECKPOINTER --> DB
     AGENT --> DB
     DB --> EVENTS
     DB --> WORKFLOWS
+    DB --> LGSTATE
 ```
 
 ---
@@ -52,12 +58,12 @@ graph TB
 #### **Streaming Implementation Details**
 
 ```python
-# Backend: ag_ui_server_fixed.py
+# Backend: ag_ui_server_pure_langgraph.py
 @app.post("/agent/run")
 async def agent_run(request: RunRequest):
     async def generate():
-        async for event in workflow_agent.run(request):
-            # Convert to AG-UI protocol format
+        async for event in workflow_engine.run(request):
+            # Stream events from pure LangGraph execution
             event_data = event.model_dump()
             yield f"data: {json.dumps(event_data)}\n\n"  # SSE format
     
@@ -116,23 +122,24 @@ const sendMessage = async (message: WorkflowMessage) => {
 
 ### **1. Backend Objects**
 
-#### **DocumentWorkflowAgent**
+#### **PureLangGraphWorkflowAgent**
 ```python
-class DocumentWorkflowAgent:
-    """Main AG-UI compatible agent that wraps LangGraph workflow"""
+class PureLangGraphWorkflowAgent:
+    """Pure LangGraph workflow agent with native AG-UI streaming"""
     
     def __init__(self):
-        self.legacy_processor = DocumentProcessor()  # Original engine
-        self.db = WorkflowDatabase()                # AG-UI state management
-        self.current_workflow_id = None
-        self.current_message_id = None
+        self.langgraph_workflow = AGUILangGraphWorkflow()  # Pure LangGraph workflow
+        self.db = WorkflowDatabase()                       # AG-UI state management
+        self.active_workflows = {}                         # Track running workflows
     
     async def run(self, request: RunRequest) -> AsyncGenerator[AgentResponse, None]:
-        """Main streaming method - yields AG-UI events"""
-        # This is where the magic happens - converts LangGraph to AG-UI events
+        """Main streaming method - uses real LangGraph execution"""
+        # Stream LangGraph workflow execution with AG-UI events
+        async for event in self.langgraph_workflow.run_streaming_workflow(document_content, workflow_id):
+            yield event
 ```
 
-**Purpose**: Bridge between AG-UI protocol and existing LangGraph workflow
+**Purpose**: Execute pure LangGraph workflows with native AG-UI event streaming
 
 #### **AgentResponse**
 ```python
@@ -254,7 +261,7 @@ async def agent_websocket(websocket: WebSocket):
 
 ### **Question: Are we not creating graphs anymore?**
 
-**Answer: HYBRID - We use LangGraph internally but wrap it with AG-UI events**
+**Answer: YES - We now use PURE LangGraph with native AG-UI event streaming**
 
 #### **Current Architecture**
 
@@ -474,16 +481,16 @@ except Exception as e:
 
 **What We Built:**
 - ✅ **Real-time Streaming**: HTTP SSE for live updates
-- ✅ **Hybrid Architecture**: AG-UI events wrapping LangGraph processing  
+- ✅ **Pure LangGraph Architecture**: Native StateGraph execution with AG-UI events from nodes
 - ✅ **Custom Objects**: Complete AG-UI integration layer
-- ✅ **State Management**: SQLite with AG-UI state tracking
+- ✅ **State Management**: SQLite with AG-UI state tracking + LangGraph checkpointing
 - ✅ **Modern UI**: React components with streaming hooks
-- ✅ **Backward Compatibility**: Legacy interface preserved
+- ✅ **Streaming Checkpointer**: Custom LangGraph checkpointer emitting AG-UI events
 
 **Key Design Decisions:**
-- **Wrapper > Rewrite**: Wrapped existing LangGraph instead of rewriting
+- **Pure LangGraph > Wrapper**: Real StateGraph execution with conditional edges
 - **HTTP > WebSocket**: Simpler implementation and debugging
 - **Custom > Official**: Built custom AG-UI client due to SDK issues
-- **Hybrid > Pure**: Combined manual orchestration with LangGraph processing
+- **Events from Nodes**: AG-UI events emitted directly from LangGraph nodes during execution
 
-**Result**: A production-ready AI agent interface that transforms document processing from batch to real-time while preserving all existing functionality.
+**Result**: A production-ready AI agent interface using true LangGraph workflow orchestration with native AG-UI streaming capabilities.

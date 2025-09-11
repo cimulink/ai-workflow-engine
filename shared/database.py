@@ -90,8 +90,8 @@ class WorkflowDatabase:
             state.validation_result.model_dump_json() if state.validation_result else None,
             state.human_review_required,
             state.error_message,
-            state.created_at.isoformat(),
-            state.updated_at.isoformat()
+            state.created_at if isinstance(state.created_at, str) else state.created_at.isoformat(),
+            state.updated_at if isinstance(state.updated_at, str) else state.updated_at.isoformat()
         ))
         
         conn.commit()
@@ -125,9 +125,9 @@ class WorkflowDatabase:
             from .types import ValidationResult
             data['validation_result'] = ValidationResult.model_validate_json(data['validation_result'])
         
-        # Convert timestamps
-        data['created_at'] = datetime.fromisoformat(data['created_at'])
-        data['updated_at'] = datetime.fromisoformat(data['updated_at'])
+        # Keep timestamps as strings (AgentState expects strings)
+        # data['created_at'] = datetime.fromisoformat(data['created_at'])
+        # data['updated_at'] = datetime.fromisoformat(data['updated_at'])
         
         # Get workflow events
         data['workflow_history'] = self.get_workflow_events(workflow_id)

@@ -68,6 +68,27 @@ class WorkflowEvent(BaseModel):
     step_name: Optional[str] = None
 
 
+class Message(BaseModel):
+    """AG-UI message format"""
+    role: str
+    content: str
+
+
+class RunRequest(BaseModel):
+    """AG-UI run request format"""
+    messages: List[Message]
+    tools: Optional[List[Dict]] = []
+    state: Optional[Dict] = {}
+
+
+class AgentResponse(BaseModel):
+    """AG-UI agent response event"""
+    type: str
+    data: Dict[str, Any]
+    timestamp: str
+    workflow_id: Optional[str] = None
+
+
 class AgentState(BaseModel):
     """AG-UI compatible agent state"""
     workflow_id: str
@@ -76,14 +97,12 @@ class AgentState(BaseModel):
     document_content: str
     extracted_data: Optional[DocumentExtractedData] = None
     validation_result: Optional[ValidationResult] = None
-    workflow_history: List[WorkflowEvent] = []
+    workflow_history: List[str] = []  # Changed to match database
     human_review_required: bool = False
+    reason_for_review: Optional[str] = None
     error_message: Optional[str] = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: datetime  # Changed to string for compatibility
+    updated_at: datetime  # Changed to string for compatibility
     
     class Config:
         use_enum_values = True
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
